@@ -20,7 +20,16 @@ class SheetManager:
             self.client = gspread.authorize(creds)
             # 透過 URL 開啟試算表
             self.doc = self.client.open_by_url(self.spreadsheet_url)
-            self.sheet = self.doc.sheet1
+            
+            # 嘗試取得指定名稱的主分頁 (優先順序: Signups > 工作表1 > 第一個分頁)
+            try:
+                self.sheet = self.doc.worksheet("Signups")
+            except:
+                try:
+                    self.sheet = self.doc.worksheet("工作表1")
+                except:
+                    # 如果都找不到，就使用第一個分頁
+                    self.sheet = self.doc.sheet1
             
             # 嘗試取得或建立 Setting 分頁
             try:
