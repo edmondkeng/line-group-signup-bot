@@ -26,13 +26,30 @@ class SheetManager:
             try:
                 self.setting_sheet = self.doc.worksheet("Setting")
             except:
-                self.setting_sheet = self.doc.add_worksheet(title="Setting", rows=10, cols=2)
+                self.setting_sheet = self.doc.add_worksheet(title="Setting", rows=20, cols=2)
                 self.setting_sheet.append_row(["項目", "內容"])
-                self.setting_sheet.append_row(["活動標題", "歡樂活動報名"])
-                self.setting_sheet.append_row(["活動說明", "請準時參加！"])
-                self.setting_sheet.append_row(["人數上限", "10"])
-                self.setting_sheet.append_row(["報名功能", "開啟"])
-                self.setting_sheet.append_row(["查詢功能", "開啟"])
+            
+            # 檢查並補齊預設設定
+            current_settings = self.get_settings()
+            default_settings = {
+                "活動標題": "歡樂活動報名",
+                "活動說明": "請準時參加！",
+                "人數上限": "10",
+                "報名功能": "TRUE", # 預設開啟 (CheckBox Checked = TRUE)
+                "查詢功能": "TRUE"
+            }
+            
+            rows_to_append = []
+            for key, value in default_settings.items():
+                if key not in current_settings:
+                    rows_to_append.append([key, value])
+            
+            if rows_to_append:
+                for row in rows_to_append:
+                    self.setting_sheet.append_row(row)
+                    # 如果是開關類的功能，嘗試加入 Checkbox 驗證 (需視 gspread 版本支援度，最簡單是使用者手動設，這裡先只填值)
+                    # 註：API 設定 Checkbox 較複雜，這裡先填入 "TRUE" 字串，使用者在 Sheet 上可選取該格 -> 插入 -> 核取方塊
+
 
             # 確保主表標題列存在
             self._init_headers()
@@ -72,14 +89,16 @@ class SheetManager:
             return {"活動標題": "活動", "人數上限": "10", "報名功能": "開啟", "查詢功能": "開啟"}
 
     def is_signup_enabled(self):
-        """檢查報名功能是否開啟"""
+        """檢查報名功能是否開啟 (支援 '開啟' 中文或 'TRUE' 布林字串)"""
         settings = self.get_settings()
-        return settings.get("報名功能", "開啟") == "開啟"
+        val = str(settings.get("報名功能", "TRUE")).upper()
+        return val == "開啟" or val == "TRUE"
 
     def is_query_enabled(self):
-        """檢查查詢功能是否開啟"""
+        """檢查查詢功能是否開啟 (支援 '開啟' 中文或 'TRUE' 布林字串)"""
         settings = self.get_settings()
-        return settings.get("查詢功能", "開啟") == "開啟"
+        val = str(settings.get("查詢功能", "TRUE")).upper()
+        return val == "開啟" or val == "TRUE"
 
     def add_signup(self, user_id, user_name, count):
         """新增或更新報名 (支援部分正取/部分候補)"""
