@@ -20,6 +20,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
+@app.route("/")
+def home():
+    return "Line Bot is Alive!"
+
 # 從環境變數讀取 Line Bot 設定
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
