@@ -33,12 +33,20 @@ def handle_text_message(event, line_bot_api):
     # 支援: +1, +2, +10, -1, -2, ?
     # 忽略一般對話訊息
     
-    match_plus = re.match(r'^\+(\d+)$', text)
-    match_minus = re.match(r'^\-(\d+)$', text)
-    is_query = (text == '?')
+    # 1. 判斷指令格式
+    # 支援: 
+    #   報名: +N, -N, Name+N, Name-N
+    #   查詢: ?, $, Name$, $$
+    
+    # 報名 Regex
+    match_plus = re.match(r'^((?P<name>[^+-]+))?\+(?P<num>\d+)$', text)
+    match_minus = re.match(r'^((?P<name>[^+-]+))?\-(?P<num>\d+)$', text)
+    is_query_signup = (text == '?')
 
-    if not (match_plus or match_minus or is_query):
-        return # 非指令，直接忽略
+    # 資料查詢 Regex
+    match_query_self = (text == '$')
+    match_query_all = (text == '$$')
+    match_query_other = re.match(r'^([^$]+)\$$', text)
 
     sheet = get_sheet_manager()
     if not sheet:
@@ -48,50 +56,100 @@ def handle_text_message(event, line_bot_api):
         )
         return
 
-    # 2. 取得使用者暱稱 (Display Name)
-    user_name = "未知用戶"
-    try:
-        # 如果是在群組中，嘗試取得該群組內的成員暱稱
-        if group_id:
-            profile = line_bot_api.get_group_member_profile(group_id, user_id)
-        else:
-            # 如果是私訊 (開發測試時)，取得個人資料
-            profile = line_bot_api.get_profile(user_id)
-        user_name = profile.display_name
-    except Exception as e:
-        print(f"無法取得使用者個資: {e}")
-        # 如果無法取得 (例如沒加好友)，可能需請用戶自己輸入，這裡先用預設值
-
     reply_msg = ""
-
-    # 3. 執行邏輯
+    
     try:
-        if match_plus:
-            count = int(match_plus.group(1))
-            msg = sheet.add_signup(user_id, user_name, count)
-            # 成功後附加目前名單
-            summary = sheet.get_summary()
-            reply_msg = f"{msg}\n\n{summary}"
+        # --- 處理報名相關指令 ---
+        if match_plus or match_minus or is_query_signup:
+            # 檢查報名功能開關
+            if not sheet.is_signup_enabled():
+                if is_query_signup:
+                     # 允許看名單，但提示已關閉? 或者都不允許? 
+                     # 依照需求: 報名開關如關閉, +, -, ? 功能無效
+                     # line_bot_api.reply_message(event.reply_token, TextSendMessage(text="報名系統目前已關閉。"))
+                     return # 直接忽略
+                return
+        
+            if match_plus:
+                count = int(match_plus.group('num'))
+                name_prefix = match_plus.group('name')
+                
+                target_id = user_id
+                target_name = "未知用戶"
+                
+                if name_prefix:
+                    # 代理報名
+                    target_id = f"PROXY_{name_prefix}"
+                    target_name = name_prefix
+                else:
+                    # 本人報名 -> 取得 Profile
+                    try:
+                        if group_id:
+                            profile = line_bot_api.get_group_member_profile(group_id, user_id)
+                        else:
+                            profile = line_bot_api.get_profile(user_id)
+                        target_name = profile.display_name
+                    except:
+                        pass
+                
+                msg = sheet.add_signup(target_id, target_name, count)
+                summary = sheet.get_summary()
+                reply_msg = f"{msg}\n\n{summary}"
 
-        elif match_minus:
-            count = int(match_minus.group(1))
-            msg = sheet.remove_signup(user_id, count)
-            summary = sheet.get_summary()
-            reply_msg = f"{msg}\n\n{summary}"
+            elif match_minus:
+                count = int(match_minus.group('num'))
+                name_prefix = match_minus.group('name')
+                
+                target_id = user_id
+                
+                if name_prefix:
+                     # 代理取消
+                     target_id = f"PROXY_{name_prefix}"
+                
+                msg = sheet.remove_signup(target_id, count)
+                summary = sheet.get_summary()
+                reply_msg = f"{msg}\n\n{summary}"
+            
+            elif is_query_signup:
+                summary = sheet.get_summary()
+                reply_msg = summary
 
-        elif is_query:
-            summary = sheet.get_summary()
-            reply_msg = summary
+        # --- 處理資料查詢指令 ---
+        elif match_query_self or match_query_all or match_query_other:
+            # 檢查查詢功能開關
+            if not sheet.is_query_enabled():
+                # line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查詢功能目前已關閉。"))
+                return # 直接忽略
 
-        # 4. 回覆 Line 訊息
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=reply_msg)
-        )
+            if match_query_all:
+                reply_msg = sheet.get_all_stats()
+            
+            elif match_query_self:
+                # 查自己 (利用 user_id)
+                results = sheet.query_stats(user_id=user_id)
+                if results:
+                    reply_msg = "\n".join(results)
+                else:
+                    reply_msg = "查無您的相關資料。"
+            
+            elif match_query_other:
+                target_name = match_query_other.group(1)
+                results = sheet.query_stats(name=target_name)
+                if results:
+                    reply_msg = "\n".join(results)
+                else:
+                    reply_msg = f"查無 {target_name} 的相關資料。"
+
+        # 4. 回覆 Line 訊息 (如果有產生物件)
+        if reply_msg:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply_msg)
+            )
 
     except Exception as e:
         print(f"處理指令時發生錯誤: {e}")
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="處理您的請求時發生錯誤，請稍後再試。")
-        )
+        # line_bot_api.reply_message(
+        #     event.reply_token,
+        #     TextSendMessage(text="處理您的請求時發生錯誤，請稍後再試。")
+        # )

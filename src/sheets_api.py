@@ -31,9 +31,19 @@ class SheetManager:
                 self.setting_sheet.append_row(["活動標題", "歡樂活動報名"])
                 self.setting_sheet.append_row(["活動說明", "請準時參加！"])
                 self.setting_sheet.append_row(["人數上限", "10"])
+                self.setting_sheet.append_row(["報名功能", "開啟"])
+                self.setting_sheet.append_row(["查詢功能", "開啟"])
 
             # 確保主表標題列存在
             self._init_headers()
+            
+            # 嘗試取得或建立 Stats 分頁
+            try:
+                self.stats_sheet = self.doc.worksheet("Stats")
+            except:
+                self.stats_sheet = self.doc.add_worksheet(title="Stats", rows=100, cols=3)
+                self.stats_sheet.append_row(["User ID", "Name", "Description"])
+
         except Exception as e:
             print(f"Google Sheets 連線失敗: {e}")
             raise
@@ -59,7 +69,17 @@ class SheetManager:
                     settings[row[0]] = row[1]
             return settings
         except:
-            return {"活動標題": "活動", "人數上限": "10"}
+            return {"活動標題": "活動", "人數上限": "10", "報名功能": "開啟", "查詢功能": "開啟"}
+
+    def is_signup_enabled(self):
+        """檢查報名功能是否開啟"""
+        settings = self.get_settings()
+        return settings.get("報名功能", "開啟") == "開啟"
+
+    def is_query_enabled(self):
+        """檢查查詢功能是否開啟"""
+        settings = self.get_settings()
+        return settings.get("查詢功能", "開啟") == "開啟"
 
     def add_signup(self, user_id, user_name, count):
         """新增或更新報名 (包含滿額判斷)"""
@@ -235,3 +255,36 @@ class SheetManager:
     def get_all_records_with_row_index(self):
         """輔助函式：取得資料並自行處理 (get_all_records 有時標題對不上會怪怪的)"""
         return self.sheet.get_all_records()
+
+    def query_stats(self, user_id=None, name=None):
+        """查詢統計資料"""
+        if not self.stats_sheet:
+            return []
+            
+        records = self.stats_sheet.get_all_records()
+        results = []
+        
+        for record in records:
+            # 根據 User ID 查詢
+            if user_id and str(record.get('User ID')) == user_id:
+                results.append(f"{record.get('Description')} ({record.get('Name')})")
+            # 根據 Name 查詢 (如果不完全匹配，可以改用 in)
+            elif name and str(record.get('Name')) == name:
+                results.append(f"{record.get('Description')} ({record.get('Name')})")
+                
+        return results
+
+    def get_all_stats(self):
+        """取得所有統計資料"""
+        if not self.stats_sheet:
+            return "尚無資料"
+            
+        records = self.stats_sheet.get_all_records()
+        if not records:
+             return "尚無資料"
+
+        lines = ["📊 統計資料一覽:"]
+        for record in records:
+            lines.append(f"{record.get('Name')}: {record.get('Description')}")
+            
+        return "\n".join(lines)
