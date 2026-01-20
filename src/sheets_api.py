@@ -82,115 +82,18 @@ class SheetManager:
         return settings.get("查詢功能", "開啟") == "開啟"
 
     def add_signup(self, user_id, user_name, count):
-        """新增或更新報名 (包含滿額判斷)"""
-        # 取得設定與目前名單
-        settings = self.get_settings()
-        try:
-            max_people = int(settings.get("人數上限", 10))
-        except:
-            max_people = 10
-            
-        records = self.get_all_records_with_row_index()
-        
-        # 計算目前正取人數
-        current_total = 0
-        for r in records:
-            if r.get('狀態') == '正取':
-                try:
-                    current_total += int(r.get('報名人數', 0))
-                except:
-                    pass
-
-        target_row = None
-        user_current_count = 0
-        
-        # 找尋使用者是否已報名
-        for i, record in enumerate(records):
-            if str(record.get('User ID')) == user_id:
-                target_row = i + 2
-                user_current_count = int(record.get('報名人數', 0))
-                break
-        
-        if target_row:
-            # 更新現有報名
-            new_count = user_current_count + count
-            # 這裡簡化邏輯：如果之前是候補，現在還是候補；如果是正取，增加的人數是否導致爆量?
-            # 為求簡單，我們重新評估該用戶狀態：只要目前總人數(扣掉他原本的) + 新人數 <= 上限，就是正取
-            
-            # 但這樣太複雜，Line群組報名通常是：只要還沒滿，報名就是正取。
-            # 如果已經滿了，新的人就是候補。
-            # 如果是「增加」報名，通常直接疊加。
-            
-            # 最簡單邏輯：
-            # 1. 計算剩餘名額
-            remaining = max_people - (current_total - (user_current_count if str(records[target_row-2].get('狀態')) == '正取' else 0))
-            
-            # 判斷狀態
-            # 如果本來就是候補，或是這次報名後會超過上限 -> 簡易處理：視為新狀態
-            # 但通常我們會希望：正取的人加人，如果不超過上限，繼續正取。
-            
-            new_status = "正取"
-            # 這裡邏輯可以很複雜，先做簡易版：
-            # 只要還有名額，就是正取。如果名額滿了，就是候補。
-            # 注意：這裡沒處理「部分正取部分候補」的情況 (如剩1個名額但報+2)，通常直接讓最後這個人變候補或正取。
-            
-            if current_total - (user_current_count if str(records[target_row-2].get('狀態')) == '正取' else 0) + new_count > max_people:
-                 new_status = "候補"
-            
-            # 保持原狀態邏輯 (如果已經是正取，通常不會因為加人變候補，除非非常嚴格)
-             # 我們採用：如果原本是正取，就維持正取 (或是提示已滿)。
-            if str(records[target_row-2].get('狀態')) == '正取':
-                new_status = "正取" # 確保已報名者權益
-            
-            self.sheet.update_cell(target_row, 3, new_count)
-            self.sheet.update_cell(target_row, 4, new_status)
-            self.sheet.update_cell(target_row, 5, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            return f"更新成功！您目前報名 {new_count} 人 ({new_status})"
-        else:
-            # 新增報名
-            if current_total + count <= max_people:
-                status = "正取"
-            else:
-                status = "候補"
-                
-            row = [user_id, user_name, count, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""]
-            self.sheet.append_row(row)
-            return f"報名成功！您報名 {count} 人 ({status})"
+        """新增或更新報名 (支援部分正取/部分候補)"""
+        return self._reconcile_user_status(user_id, user_name, count)
 
     def remove_signup(self, user_id, count):
         """取消報名"""
-        records = self.get_all_records_with_row_index()
-        target_row = None
-        current_count = 0
-        
-        for i, record in enumerate(records):
-            if str(record.get('User ID')) == user_id:
-                target_row = i + 2
-                try:
-                    current_count = int(record.get('報名人數', 0))
-                except:
-                    current_count = 0
-                break
-        
-        if not target_row:
-            return "您尚未報名喔！"
-        
-        new_count = current_count - count
-        
-        if new_count <= 0:
-            self.sheet.delete_rows(target_row)
-            # 刪除後，這裡可以做「自動遞補」邏輯 (檢查候補名單並轉正)
-            # 為了避免過於複雜，先不做自動遞補通知，只做刪除
-            self._check_and_promote_waitlist()
-            return "已取消您的所有報名。"
-        else:
-            self.sheet.update_cell(target_row, 3, new_count)
-            self.sheet.update_cell(target_row, 5, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            return f"已減少報名人數。您目前保留 {new_count} 人。"
+        msg = self._reconcile_user_status(user_id, "", -count)
+        # 取消後觸發自動遞補
+        self._check_and_promote_waitlist()
+        return msg
 
-    def _check_and_promote_waitlist(self):
-        """檢查是否有空缺並遞補 (簡易版)"""
-        # 讀取設定
+    def _reconcile_user_status(self, user_id, user_name, delta):
+        """核心邏輯：重新計算並分配用戶的 正取/候補 狀態"""
         settings = self.get_settings()
         try:
             max_people = int(settings.get("人數上限", 10))
@@ -198,25 +101,146 @@ class SheetManager:
             max_people = 10
             
         records = self.get_all_records_with_row_index()
-        current_total = 0
-        # 計算正取人數
-        for r in records:
-            if r.get('狀態') == '正取':
-                 try:
-                    current_total += int(r.get('報名人數', 0))
-                 except: pass
+        
+        # 1. 蒐集當前用戶資訊與全域正取計數
+        user_rows = [] # (index_in_list, record_dict)
+        other_approved_count = 0
+        current_user_total = 0
+        current_user_name = user_name # 優先使用傳入的名字
+        
+        for i, r in enumerate(records):
+            r_uid = str(r.get('User ID'))
+            r_count = 0
+            try:
+                r_count = int(r.get('報名人數', 0))
+            except: pass
+            
+            status = r.get('狀態')
+            
+            if r_uid == user_id:
+                user_rows.append((i, r))
+                current_user_total += r_count
+                if not current_user_name and r.get('顯示名稱'):
+                    current_user_name = r.get('顯示名稱')
+            else:
+                if status == '正取':
+                    other_approved_count += r_count
 
-        # 找候補
-        if current_total < max_people:
-            for i, r in enumerate(records):
-                if r.get('狀態') == '候補':
-                    # 嘗試遞補
-                    count = int(r.get('報名人數', 1))
-                    if current_total + count <= max_people:
-                        # 轉正
-                        self.sheet.update_cell(i + 2, 4, "正取")
-                        current_total += count
-                        # 實務上這裡應該要主動通知該用戶，但 Line 無法主動推播 (除非付費或好友)，所以只能被動更新顯示
+        # 2. 計算新總數
+        new_total = current_user_total + delta
+        if new_total < 0: new_total = 0
+        
+        if new_total == 0 and current_user_total == 0:
+            return "您尚未報名喔！"
+        
+        if new_total == 0:
+            # 刪除所有該用戶資料 (從後面刪避免 index 跑掉)
+            # 需先將 row index 轉為實際 sheet row index (1-based header + 1-based list = +2)
+            rows_to_delete = sorted([x[0] + 2 for x in user_rows], reverse=True)
+            for r_idx in rows_to_delete:
+                self.sheet.delete_rows(r_idx)
+            return "已取消您的所有報名。"
+
+        # 3. 分配 正取 vs 候補
+        # 剩餘名額 = 上限 - 其他人已佔用的
+        remaining_for_user = max_people - other_approved_count
+        if remaining_for_user < 0: remaining_for_user = 0
+        
+        new_approved = min(new_total, remaining_for_user)
+        new_waitlist = new_total - new_approved
+        
+        # 4. 更新 Google Sheet
+        # 策略：重複利用既有的 row，多餘的刪除，不足的 append
+        # 分類既有 row
+        row_approved_idx = None
+        row_waitlist_idx = None
+        
+        # 尋找既有的正取與候補 row (取第一個找到的)
+        for idx, r in user_rows:
+            if r.get('狀態') == '正取' and row_approved_idx is None:
+                row_approved_idx = idx + 2
+            elif r.get('狀態') == '候補' and row_waitlist_idx is None:
+                row_waitlist_idx = idx + 2
+        
+        # 收集需要刪除的 row (多餘的)
+        rows_to_delete = []
+        used_indices = set()
+        if row_approved_idx: used_indices.add(row_approved_idx)
+        if row_waitlist_idx: used_indices.add(row_waitlist_idx)
+        
+        for idx, r in user_rows:
+            sheet_idx = idx + 2
+            if sheet_idx not in used_indices:
+                rows_to_delete.append(sheet_idx)
+        
+        # 執行刪除 (倒序)
+        for r_idx in sorted(rows_to_delete, reverse=True):
+            self.sheet.delete_rows(r_idx)
+            # 調整 index: 如果刪除的在我們保留的前面，保留的 index 要扣 (稍微複雜，簡單一點：重新整理或相信 gspread)
+            # 為了安全，如果發生刪除，後續的 update 操作可能會有風險。
+            # 但因為我們通常只有 1-2 筆資料，刪除重來可能更簡單？
+            # 不，保留 row 可以保留「報名時間」。
+            # 簡單解法：如果刪了 row，我們手動更新 local 的 row_approved_idx / row_waitlist_idx
+            if row_approved_idx and r_idx < row_approved_idx: row_approved_idx -= 1
+            if row_waitlist_idx and r_idx < row_waitlist_idx: row_waitlist_idx -= 1
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 更新/建立 正取 Row
+        if new_approved > 0:
+            if row_approved_idx:
+                self.sheet.update_cell(row_approved_idx, 3, new_approved)
+                self.sheet.update_cell(row_approved_idx, 5, timestamp)
+            else:
+                self.sheet.append_row([user_id, current_user_name, new_approved, "正取", timestamp, ""])
+                # Append 後，如果緊接著要 update waitlist，要注意 row count 變了，但 waitlist 是找既有的 index，不受 append 影響
+        else:
+            # 如果原本有正取但現在變成 0 (例如人數上限變少)，前面已經規劃刪除多餘 row
+            # 若 row_approved_idx 仍然存在 (被選為保留的)，則需刪除
+            if row_approved_idx:
+                self.sheet.delete_rows(row_approved_idx)
+                if row_waitlist_idx and row_approved_idx < row_waitlist_idx: row_waitlist_idx -= 1
+
+        # 更新/建立 候補 Row
+        if new_waitlist > 0:
+            if row_waitlist_idx:
+                self.sheet.update_cell(row_waitlist_idx, 3, new_waitlist)
+                self.sheet.update_cell(row_waitlist_idx, 5, timestamp)
+            else:
+                self.sheet.append_row([user_id, current_user_name, new_waitlist, "候補", timestamp, ""])
+        else:
+             if row_waitlist_idx:
+                self.sheet.delete_rows(row_waitlist_idx)
+
+        # 回傳訊息
+        status_msg = ""
+        if new_approved > 0 and new_waitlist > 0:
+            status_msg = f"已更新！ {new_approved} 人正取，{new_waitlist} 人候補。"
+        elif new_approved > 0:
+            status_msg = f"已更新！ {new_approved} 人正取。"
+        elif new_waitlist > 0:
+            status_msg = f"已更新！ {new_waitlist} 人排入候補。"
+            
+        return status_msg
+
+    def _check_and_promote_waitlist(self):
+        """檢查並遞補"""
+        # 取得所有非重複的候補名單 User IDs
+        records = self.sheet.get_all_records()
+        waitlist_users = set()
+        for r in records:
+            if r.get('狀態') == '候補':
+                waitlist_users.add(str(r.get('User ID')))
+        
+        # 逐一重新計算 (因為邏輯共用，直接帶入 delta=0 即可觸發重分配)
+        for uid in waitlist_users:
+            # 找出該 uid 對應名字 (雖然 _reconcile 會自找，但傳入較保險)
+            name = ""
+            for r in records:
+                if str(r.get('User ID')) == uid:
+                    name = r.get('顯示名稱')
+                    break
+            self._reconcile_user_status(uid, name, 0)
                     
     def get_summary(self):
         """取得統計資訊文字"""
