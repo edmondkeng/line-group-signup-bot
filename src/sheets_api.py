@@ -125,7 +125,7 @@ class SheetManager:
             self.sheet.update_cell(target_row, 3, new_count)
             self.sheet.update_cell(target_row, 4, new_status)
             self.sheet.update_cell(target_row, 5, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            return f"更新成功！目前 {new_count} 人 ({new_status})"
+            return f"更新成功！您目前報名 {new_count} 人 ({new_status})"
         else:
             # 新增報名
             if current_total + count <= max_people:
@@ -135,7 +135,7 @@ class SheetManager:
                 
             row = [user_id, user_name, count, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""]
             self.sheet.append_row(row)
-            return f"報名成功！ {count} 人 ({status})"
+            return f"報名成功！您報名 {count} 人 ({status})"
 
     def remove_signup(self, user_id, count):
         """取消報名"""
@@ -166,7 +166,7 @@ class SheetManager:
         else:
             self.sheet.update_cell(target_row, 3, new_count)
             self.sheet.update_cell(target_row, 5, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            return f"已減少報名人數。目前剩餘 {new_count} 人。"
+            return f"已減少報名人數。您目前保留 {new_count} 人。"
 
     def _check_and_promote_waitlist(self):
         """檢查是否有空缺並遞補 (簡易版)"""
